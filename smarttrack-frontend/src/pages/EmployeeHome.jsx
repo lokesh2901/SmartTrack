@@ -99,18 +99,21 @@ const RecenterMap = ({ center }) => {
 // ===================================================================
 
 // -------------------------------------------------------------------
-// --- 2A. HOME / CHECK-IN / CHECK-OUT PAGE (FULLY FIXED) ---
+// --- 2A. HOME / CHECK-IN / CHECK-OUT PAGE (MAP POLLING RESTORED) ---
 // -------------------------------------------------------------------
+
+const CHECK_INTERVAL_MS = 5000; // 5 seconds for map refresh
 
 const CheckInOutPage = () => {
     const [allOffices, setAllOffices] = useState([]);
     
-    // ⭐ FIX: Use separate loading states
-    const [pageLoading, setPageLoading] = useState(true); // For initial page load
-    const [actionLoading, setActionLoading] = useState(false); // For button clicks
+    const [pageLoading, setPageLoading] = useState(true);
+    const [actionLoading, setActionLoading] = useState(false);
 
     const [currentLocation, setCurrentLocation] = useState(null);
     const [currentDayStatus, setCurrentDayStatus] = useState("Loading Status...");
+    // ⭐ RESTORED: State to track the last successful location time for display
+    const [lastLocationUpdateTime, setLastLocationUpdateTime] = useState(null); 
     const [statusMessage, setStatusMessage] = useState("Ready for action.");
     const [toast, setToast] = useState({ 
       message: "", 
@@ -122,7 +125,7 @@ const CheckInOutPage = () => {
     const isMobile = width < MOBILE_BREAKPOINT;
     const token = localStorage.getItem("token");
 
-    // --- Geolocation Speed Fix Applied ---
+    // --- Geolocation Function (MAX_AGE set low for frequent fresh data) ---
     const getLocation = () => { 
       return new Promise((resolve, reject) => {
         if (!navigator.geolocation) {
@@ -130,9 +133,9 @@ const CheckInOutPage = () => {
         }
         
         const options = {
-          enableHighAccuracy: false, // Faster results
+          enableHighAccuracy: false, 
           timeout: 5000,           
-          maximumAge: 60000          // Use cached position if recent
+          maximumAge: 5000          // Max age is 5s to ensure fresh data for every poll
         };
 
         navigator.geolocation.getCurrentPosition(
@@ -148,32 +151,38 @@ const CheckInOutPage = () => {
       });
     };
 
-    const fetchUserLocation = async () => {
+    // --- Location Fetch Function (Used by both initial load and the poller) ---
+    const fetchUserLocation = async (isPoll = false) => {
       try {
+        // This function only updates the state for map display
         const location = await getLocation();
         setCurrentLocation([location.latitude, location.longitude]);
+        setLastLocationUpdateTime(new Date()); // Update timestamp on success
+        if (isPoll) {
+             console.log(`Map location refreshed successfully at ${new Date().toLocaleTimeString()}.`);
+             // Do NOT update statusMessage frequently, only keep it for action feedback
+        }
       } catch (err) {
-        console.warn(err.message);
+        console.warn(`Map location refresh failed: ${err.message}`);
       }
     };
 
     const showToast = (message, isError = false) => {
+      // ... (Toast logic remains the same)
       setToast({ message, isVisible: true, isError });
       setTimeout(() => {
         setToast({ message: "", isVisible: false, isError: false });
       }, 3000);
     };
     
-    // --- New Function: Fetch Current Status with Debugging ---
     const fetchCurrentStatus = async () => {
+        // ... (Fetch status logic remains the same)
         try {
             const statusRes = await api.get('/attendance/status', {
                 headers: { Authorization: `Bearer ${token}` },
             });
             
             const status = statusRes.data.status || 'Absent';
-            
-            // ⭐ DEBUG LOG: This is key for confirming the backend status
             console.log("API Current Status:", status);
             
             setCurrentDayStatus(status);
@@ -185,45 +194,63 @@ const CheckInOutPage = () => {
         }
     };
     
-    // Initial Data Fetch
+    // --- 1. Initial Data Fetch on Component Mount ---
     useEffect(() => {
         const fetchData = async () => {
-            fetchUserLocation(); 
+            await fetchUserLocation(); // Initial location fetch for map
             try {
+                // Fetch Office Data
                 const officeRes = await api.get('/offices', {
                     headers: { Authorization: `Bearer ${token}` },
                 });
-                
                 if (officeRes.data && officeRes.data.length > 0) {
                     setAllOffices(officeRes.data);
                 } else {
                     showToast("No offices found in the database.", true);
                 }
-
-                await fetchCurrentStatus(); // Fetch initial status
-
+                
+                // Fetch Initial Status
+                await fetchCurrentStatus(); 
             } catch (err) {
                 console.error("Failed to fetch initial data:", err);
                 showToast("Failed to fetch initial data. Please try refreshing.", true);
             } finally {
-                setPageLoading(false); // End page loading
+                setPageLoading(false); 
             }
         };
         fetchData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [token]);
 
+    // --- 2. ⭐ RESTORED: Location Polling Effect for MAP ONLY ---
+    useEffect(() => {
+        // Start the interval right away
+        const intervalId = setInterval(() => {
+            fetchUserLocation(true); // Call fetchUserLocation to update map marker
+        }, CHECK_INTERVAL_MS);
 
-    // --- Attendance Handling Logic ---
+        // Cleanup function to clear the interval when component unmounts
+        return () => {
+            console.log("Map location polling stopped.");
+            clearInterval(intervalId);
+        };
+        // Dependency array: Only runs on mount and unmount
+    }, []); 
+
+    // --- Attendance Handling Logic (Uses a fresh getLocation() call on button click) ---
     const handleAttendance = async (type) => {
+        
         if (allOffices.length === 0) return showToast("Office location data is missing.", true);
         
         setStatusMessage(`Getting your location...`); 
-        setActionLoading(true); // Start action loading
+        setActionLoading(true); 
 
         try {
-            const location = await getLocation();
+            // ⭐ CRITICAL: Call getLocation() here to ensure the most accurate, immediate location 
+            // is used for the API call and geo-fence validation, independent of the map poller's schedule.
+            const location = await getLocation(); 
             const { latitude: userLat, longitude: userLon } = location;
-            setCurrentLocation([userLat, userLon]); 
+            // setCurrentLocation([userLat, userLon]); // This is redundant as poller handles map update
             setStatusMessage(`Location found. Validating...`);
 
             let closestValidOffice = null;
@@ -253,8 +280,6 @@ const CheckInOutPage = () => {
             const successMsg = `${type} successful!`;
             showToast(successMsg, false);
             setStatusMessage(`${successMsg} at ${closestValidOffice.name}.`);
-            
-            // CRITICAL: Rerun the status check to update UI after success
             await fetchCurrentStatus(); 
 
         } catch (err) {
@@ -272,7 +297,7 @@ const CheckInOutPage = () => {
             showToast(`Error during ${type}: ${errorMessage}`, true);
             setStatusMessage(`Failed to ${type}. Reason: ${errorMessage}`);
         } finally {
-            setActionLoading(false); // End action loading
+            setActionLoading(false); 
         }
     };
 
@@ -309,6 +334,8 @@ const CheckInOutPage = () => {
             )}
             
             <h3 style={styles.cardTitle(isMobile)}>📍 Geolocation Check-in/out</h3>
+            
+            {/*  */}
 
             <div style={styles.mapContainer(isMobile)}>
                 <MapContainer
@@ -360,32 +387,21 @@ const CheckInOutPage = () => {
                         {currentDayStatus}
                     </span>
                 </p>
-                <p style={{ margin: 0, fontSize: '0.9em', color: '#6c757d' }}><strong>Action Status:</strong> {statusMessage}</p>
-                 
-                {/* ⭐ DEBUG/UTILITY: Manual Status Refresh Button */}
-                <button 
-                    onClick={fetchCurrentStatus}
-                    style={{ 
-                        backgroundColor: PRIMARY_COLOR, 
-                        color: 'white', 
-                        border: 'none', 
-                        padding: '5px 10px', 
-                        borderRadius: '4px',
-                        marginTop: '10px',
-                        cursor: 'pointer',
-                        fontSize: '0.85em'
-                    }}
-                    disabled={actionLoading || pageLoading}
-                >
-                    {pageLoading || actionLoading ? 'Loading...' : '🔄 Refresh Status'}
-                </button>
+                <p style={{ margin: 0, fontSize: '0.9em', color: '#6c757d' }}>
+                    <strong>Action Status:</strong> {statusMessage}
+                </p>
+                {/* ⭐ DISPLAY: Last Map Update Time */}
+                {lastLocationUpdateTime && (
+                     <p style={{ margin: '5px 0 0 0', fontSize: '0.8em', color: '#6c757d' }}>
+                        Map Location Updated: {lastLocationUpdateTime.toLocaleTimeString()} (Every {CHECK_INTERVAL_MS / 1000}s)
+                    </p>
+                )}
             </div>
 
             <div style={styles.buttonGroup(isMobile)}>
                 <button 
                     onClick={() => handleAttendance("Check In")}
                     style={{ ...styles.button(isMobile), backgroundColor: SUCCESS_COLOR }}
-                    // ⭐ MULTI-SEGMENT FIX: Only disabled if *currently* checked in.
                     disabled={actionLoading || currentDayStatus === 'Checked In'} 
                 >
                     {actionLoading ? 'Processing...' : '✅ Check In'}
@@ -393,7 +409,6 @@ const CheckInOutPage = () => {
                 <button 
                     onClick={() => handleAttendance("Check Out")}
                     style={{ ...styles.button(isMobile), backgroundColor: DANGER_COLOR }}
-                    // Only enabled if *currently* checked in.
                     disabled={actionLoading || currentDayStatus !== 'Checked In'} 
                 >
                     {actionLoading ? 'Processing...' : '🚪 Check Out'}
