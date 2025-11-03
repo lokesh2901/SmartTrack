@@ -14,7 +14,8 @@ app.use(
   cors({
     origin: [
       'http://localhost:5173',
-      'https://smarttrack-pymh.onrender.com'// update this after frontend deployment
+      'https://smarttrack-pymh.onrender.com',
+      'https://smart-track-beta.vercel.app'// update this after frontend deployment
   
 
     ],
