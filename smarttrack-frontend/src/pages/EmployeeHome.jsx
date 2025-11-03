@@ -133,7 +133,7 @@ const CheckInOutPage = () => {
         }
         
         const options = {
-          enableHighAccuracy: false, 
+          enableHighAccuracy: true, 
           timeout: 5000,           
           maximumAge: 5000          // Max age is 5s to ensure fresh data for every poll
         };
