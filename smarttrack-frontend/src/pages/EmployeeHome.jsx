@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet"; 
 import L from "leaflet";
-import axios from "axios"; // We still need the base import for the interceptor
+import axios from "axios"; 
 import 'leaflet/dist/leaflet.css'; 
 import officeMarkerImage from '../assets/office.png';
 import userMarkerImage from '../assets/user.png';
@@ -25,25 +25,20 @@ const FONT_COLOR = '#343a40';
 const BACKGROUND_COLOR = '#f8f9fa';
 
 // --- ⭐ ROBUSTNESS FIX: AXIOS API INSTANCE WITH INTERCEPTOR ---
-// We create a custom 'api' instance to handle all our requests.
 const api = axios.create({
   baseURL: API_BASE_URL
 });
 
-// This interceptor runs on EVERY response from the API
 api.interceptors.response.use(
-  (response) => response, // If response is 2xx, just pass it through
+  (response) => response, 
   (error) => {
-    // If the error is a 401 (Unauthorized)
     if (error.response && error.response.status === 401) {
       console.warn("Unauthorized request. Token may be expired. Logging out.");
-      // Clear the invalid token and user data
       localStorage.removeItem("token");
       localStorage.removeItem("user");
-      // Force a redirect to the login page
+      // Force a redirect to the login page (ensure your app handles this route)
       window.location.href = '/'; 
     }
-    // IMPORTANT: R-throw the error so the component's .catch() block still fires
     return Promise.reject(error);
   }
 );
@@ -104,281 +99,308 @@ const RecenterMap = ({ center }) => {
 // ===================================================================
 
 // -------------------------------------------------------------------
-// --- 2A. HOME / CHECK-IN / CHECK-OUT PAGE ---
-// -------------------------------------------------------------------
-
-// -------------------------------------------------------------------
-// --- 2A. HOME / CHECK-IN / CHECK-OUT PAGE (REVISED FIX) ---
+// --- 2A. HOME / CHECK-IN / CHECK-OUT PAGE (FULLY FIXED) ---
 // -------------------------------------------------------------------
 
 const CheckInOutPage = () => {
-  const [allOffices, setAllOffices] = useState([]);
-  
-  // ⭐ FIX: Use two separate loading states
-  const [pageLoading, setPageLoading] = useState(true); // For initial page load
-  const [actionLoading, setActionLoading] = useState(false); // For button clicks
+    const [allOffices, setAllOffices] = useState([]);
+    
+    // ⭐ FIX: Use separate loading states
+    const [pageLoading, setPageLoading] = useState(true); // For initial page load
+    const [actionLoading, setActionLoading] = useState(false); // For button clicks
 
-  const [currentLocation, setCurrentLocation] = useState(null);
-  const [currentDayStatus, setCurrentDayStatus] = useState("Loading Status...");
-  const [statusMessage, setStatusMessage] = useState("Ready for action.");
-  const [toast, setToast] = useState({ 
-    message: "", 
-    isVisible: false, 
-    isError: false 
-  });
-
-  const width = useWindowSize();
-  const isMobile = width < MOBILE_BREAKPOINT;
-  const token = localStorage.getItem("token");
-
-  // --- Optimized Geolocation (from previous fix) ---
-  const getLocation = () => { 
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        return reject(new Error("Geolocation is not supported by your browser."));
-      }
-      
-      const options = {
-        enableHighAccuracy: false, 
-        timeout: 5000,
-        maximumAge: 60000 
-      };
-
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          resolve({ latitude, longitude });
-        },
-        (error) => {
-          reject(new Error(`Geolocation error: ${error.message}`));
-        },
-        options
-      );
+    const [currentLocation, setCurrentLocation] = useState(null);
+    const [currentDayStatus, setCurrentDayStatus] = useState("Loading Status...");
+    const [statusMessage, setStatusMessage] = useState("Ready for action.");
+    const [toast, setToast] = useState({ 
+      message: "", 
+      isVisible: false, 
+      isError: false 
     });
-  };
 
-  const fetchUserLocation = async () => {
-    try {
-      const location = await getLocation();
-      setCurrentLocation([location.latitude, location.longitude]);
-    } catch (err) {
-      console.warn(err.message);
-    }
-  };
+    const width = useWindowSize();
+    const isMobile = width < MOBILE_BREAKPOINT;
+    const token = localStorage.getItem("token");
 
-  const showToast = (message, isError = false) => {
-    setToast({ message, isVisible: true, isError });
-    setTimeout(() => {
-      setToast({ message: "", isVisible: false, isError: false });
-    }, 3000);
-  };
-
-  // Fetch All Office Data AND Current Status on load
-  useEffect(() => {
-    const fetchData = async () => {
-      fetchUserLocation(); 
-      try {
-        // Use 'api' instance (assuming it's defined globally as in previous fix)
-        const officeRes = await api.get('/offices', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        
-        if (officeRes.data && officeRes.data.length > 0) {
-          setAllOffices(officeRes.data);
-        } else {
-          showToast("No offices found in the database.", true);
+    // --- Geolocation Speed Fix Applied ---
+    const getLocation = () => { 
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          return reject(new Error("Geolocation is not supported by your browser."));
         }
-
-        const statusRes = await api.get('/attendance/status', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
         
-        const status = statusRes.data.status || 'Absent';
-        setCurrentDayStatus(status);
+        const options = {
+          enableHighAccuracy: false, // Faster results
+          timeout: 5000,           
+          maximumAge: 60000          // Use cached position if recent
+        };
 
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude } = position.coords;
+            resolve({ latitude, longitude });
+          },
+          (error) => {
+            reject(new Error(`Geolocation error: ${error.message}`));
+          },
+          options
+        );
+      });
+    };
+
+    const fetchUserLocation = async () => {
+      try {
+        const location = await getLocation();
+        setCurrentLocation([location.latitude, location.longitude]);
       } catch (err) {
-        console.error("Failed to fetch initial data:", err);
-        showToast("Failed to fetch initial data. Please try refreshing.", true);
-        setCurrentDayStatus("Unknown (Error)");
-      } finally {
-        // ⭐ FIX: Only set PAGE loading to false
-        setPageLoading(false);
+        console.warn(err.message);
       }
     };
-    fetchData();
-  }, [token]);
 
-  // --- Attendance Handling Logic ---
-  const handleAttendance = async (type) => {
-    if (allOffices.length === 0) return showToast("Office location data is missing.", true);
+    const showToast = (message, isError = false) => {
+      setToast({ message, isVisible: true, isError });
+      setTimeout(() => {
+        setToast({ message: "", isVisible: false, isError: false });
+      }, 3000);
+    };
     
-    setStatusMessage(`Getting your location...`); 
-    // ⭐ FIX: Only set ACTION loading to true
-    setActionLoading(true);
-
-    try {
-      // 1. Get location
-      const location = await getLocation();
-      const { latitude: userLat, longitude: userLon } = location;
-      setCurrentLocation([userLat, userLon]); 
-      setStatusMessage(`Location found. Validating...`);
-
-      // 2. Find the closest valid office
-      let closestValidOffice = null;
-      for (const office of allOffices) {
-        const distance = calculateDistance(userLat, userLon, office.latitude, office.longitude);
-        if (distance <= office.radius) {
-          closestValidOffice = office;
-          break; 
+    // --- New Function: Fetch Current Status with Debugging ---
+    const fetchCurrentStatus = async () => {
+        try {
+            const statusRes = await api.get('/attendance/status', {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            
+            const status = statusRes.data.status || 'Absent';
+            
+            // ⭐ DEBUG LOG: This is key for confirming the backend status
+            console.log("API Current Status:", status);
+            
+            setCurrentDayStatus(status);
+            return status;
+        } catch (err) {
+            console.error("Failed to fetch current status:", err);
+            setCurrentDayStatus("Unknown (Error)");
+            return "Unknown";
         }
-      }
+    };
+    
+    // Initial Data Fetch
+    useEffect(() => {
+        const fetchData = async () => {
+            fetchUserLocation(); 
+            try {
+                const officeRes = await api.get('/offices', {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                
+                if (officeRes.data && officeRes.data.length > 0) {
+                    setAllOffices(officeRes.data);
+                } else {
+                    showToast("No offices found in the database.", true);
+                }
 
-      // 3. Handle validation failure
-      if (!closestValidOffice) {
-        const msg = `You are not within the radius of any registered office to ${type}.`;
-        showToast(msg, true);
-        setStatusMessage("Failed: Too far from any office.");
-        // ⭐ FIX: Set ACTION loading to false
-        setActionLoading(false);
-        return;
-      }
+                await fetchCurrentStatus(); // Fetch initial status
 
-      // 4. Make API Call
-      setStatusMessage(`Valid location. Sending ${type} request...`);
-      const res = await api.post(
-        `/attendance/${type.toLowerCase().replace(' ', '')}`,
-        { latitude: userLat, longitude: userLon },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+            } catch (err) {
+                console.error("Failed to fetch initial data:", err);
+                showToast("Failed to fetch initial data. Please try refreshing.", true);
+            } finally {
+                setPageLoading(false); // End page loading
+            }
+        };
+        fetchData();
+    }, [token]);
 
-      // 5. Handle Success
-      const successMsg = `${type} successful!`;
-      showToast(successMsg, false);
-      setStatusMessage(`${successMsg} at ${closestValidOffice.name}.`);
-      setCurrentDayStatus(type === "Check In" ? "Checked In" : "Checked Out");
 
-    } catch (err) {
-      console.error(`Failed to ${type}:`, err.response ? err.response.data : err);
-      
-      let errorMessage = "An error occurred.";
-      if (err.message.includes("Geolocation")) {
-        errorMessage = err.message;
-      } else if (err.response?.data?.message) {
-        errorMessage = err.response.data.message;
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      
-      showToast(`Error during ${type}: ${errorMessage}`, true);
-      setStatusMessage(`Failed to ${type}. Reason: ${errorMessage}`);
-    } finally {
-      // ⭐ FIX: Finally, set ACTION loading to false
-      setActionLoading(false);
+    // --- Attendance Handling Logic ---
+    const handleAttendance = async (type) => {
+        if (allOffices.length === 0) return showToast("Office location data is missing.", true);
+        
+        setStatusMessage(`Getting your location...`); 
+        setActionLoading(true); // Start action loading
+
+        try {
+            const location = await getLocation();
+            const { latitude: userLat, longitude: userLon } = location;
+            setCurrentLocation([userLat, userLon]); 
+            setStatusMessage(`Location found. Validating...`);
+
+            let closestValidOffice = null;
+            for (const office of allOffices) {
+                const distance = calculateDistance(userLat, userLon, office.latitude, office.longitude);
+                if (distance <= office.radius) {
+                    closestValidOffice = office;
+                    break; 
+                }
+            }
+
+            if (!closestValidOffice) {
+                const msg = `You are not within the radius of any registered office to ${type}.`;
+                showToast(msg, true);
+                setStatusMessage("Failed: Too far from any office.");
+                setActionLoading(false);
+                return;
+            }
+
+            setStatusMessage(`Valid location. Sending ${type} request...`);
+            await api.post(
+                `/attendance/${type.toLowerCase().replace(' ', '')}`,
+                { latitude: userLat, longitude: userLon },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+
+            const successMsg = `${type} successful!`;
+            showToast(successMsg, false);
+            setStatusMessage(`${successMsg} at ${closestValidOffice.name}.`);
+            
+            // CRITICAL: Rerun the status check to update UI after success
+            await fetchCurrentStatus(); 
+
+        } catch (err) {
+            console.error(`Failed to ${type}:`, err.response ? err.response.data : err);
+            
+            let errorMessage = "An error occurred.";
+            if (err.message.includes("Geolocation")) {
+                errorMessage = err.message;
+            } else if (err.response?.data?.message) {
+                errorMessage = err.response.data.message;
+            } else if (err.message) {
+                errorMessage = err.message;
+            }
+            
+            showToast(`Error during ${type}: ${errorMessage}`, true);
+            setStatusMessage(`Failed to ${type}. Reason: ${errorMessage}`);
+        } finally {
+            setActionLoading(false); // End action loading
+        }
+    };
+
+
+    // --- JSX Render ---
+    if (pageLoading) {
+        return <div style={{ textAlign: 'center', padding: '50px' }}>Loading Map and Status...</div>;
     }
-  };
+    
+    if (!pageLoading && allOffices.length === 0) {
+        return <div style={{ textAlign: 'center', padding: '50px' }}>No office data available. Please contact admin.</div>;
+    }
 
+    const firstOffice = allOffices[0];
+    const initialCenter = [firstOffice.latitude, firstOffice.longitude];
 
-  // --- JSX Render ---
-  // ⭐ FIX: Use pageLoading for the initial loader
-  if (pageLoading) {
-    return <div style={{ textAlign: 'center', padding: '50px' }}>Loading Map and Status...</div>;
-  }
-  
-  if (!pageLoading && allOffices.length === 0) {
-    return <div style={{ textAlign: 'center', padding: '50px' }}>No office data available. Please contact admin.</div>;
-  }
+    const getStatusColor = (status) => {
+        if (status === 'Checked In') return SUCCESS_COLOR;
+        if (status === 'Checked Out') return PRIMARY_COLOR; 
+        if (status === 'Absent') return DANGER_COLOR;
+        return WARNING_COLOR;
+    };
 
-  const firstOffice = allOffices[0];
-  const initialCenter = [firstOffice.latitude, firstOffice.longitude];
+    return (
+        <div style={styles.card(isMobile)}>
+            
+            {toast.isVisible && (
+                <div style={{
+                    ...styles.toast(isMobile),
+                    backgroundColor: toast.isError ? DANGER_COLOR : SUCCESS_COLOR, 
+                }}>
+                    {toast.message}
+                </div>
+            )}
+            
+            <h3 style={styles.cardTitle(isMobile)}>📍 Geolocation Check-in/out</h3>
 
-  const getStatusColor = (status) => {
-    if (status === 'Checked In') return SUCCESS_COLOR;
-    if (status === 'Checked Out') return PRIMARY_COLOR; 
-    if (status === 'Absent') return DANGER_COLOR;
-    return WARNING_COLOR;
-  };
+            <div style={styles.mapContainer(isMobile)}>
+                <MapContainer
+                    key={firstOffice.id} 
+                    center={initialCenter}
+                    zoom={16}
+                    scrollWheelZoom={true}
+                    style={styles.mapStyle(isMobile)} 
+                >
+                    <RecenterMap center={currentLocation} />
+                    
+                    <TileLayer
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        attribution="&copy; OpenStreetMap contributors"
+                    />
+                    
+                    {allOffices.map((office) => {
+                        const officePosition = [office.latitude, office.longitude];
+                        return (
+                            <React.Fragment key={office.id}>
+                                <Marker position={officePosition} icon={blueIcon}>
+                                    <Popup>
+                                        <strong>{office.name}</strong> 
+                                        <br />
+                                        Radius: {office.radius}m
+                                    </Popup>
+                                </Marker>
+                                <Circle
+                                    center={officePosition}
+                                    radius={office.radius}
+                                    pathOptions={{ color: SUCCESS_COLOR, fillColor: SUCCESS_COLOR, fillOpacity: 0.2 }}
+                                />
+                            </React.Fragment>
+                        );
+                    })}
+                
+                    {currentLocation && (
+                        <Marker position={currentLocation} icon={userPinIcon}>
+                            <Popup>Your Current Location</Popup>
+                        </Marker>
+                    )}
+                </MapContainer>
+            </div>
 
-  return (
-    <div style={styles.card(isMobile)}>
-      
-      {toast.isVisible && (
-        <div style={{
-          ...styles.toast(isMobile),
-          backgroundColor: toast.isError ? DANGER_COLOR : SUCCESS_COLOR, 
-        }}>
-          {toast.message}
+            <div style={styles.statusBox(isMobile)}>
+                <p style={{ margin: '0 0 5px 0' }}>
+                    <strong>Today's Status:</strong> 
+                    <span style={{ color: getStatusColor(currentDayStatus), fontWeight: '600', marginLeft: '10px' }}>
+                        {currentDayStatus}
+                    </span>
+                </p>
+                <p style={{ margin: 0, fontSize: '0.9em', color: '#6c757d' }}><strong>Action Status:</strong> {statusMessage}</p>
+                 
+                {/* ⭐ DEBUG/UTILITY: Manual Status Refresh Button */}
+                <button 
+                    onClick={fetchCurrentStatus}
+                    style={{ 
+                        backgroundColor: PRIMARY_COLOR, 
+                        color: 'white', 
+                        border: 'none', 
+                        padding: '5px 10px', 
+                        borderRadius: '4px',
+                        marginTop: '10px',
+                        cursor: 'pointer',
+                        fontSize: '0.85em'
+                    }}
+                    disabled={actionLoading || pageLoading}
+                >
+                    {pageLoading || actionLoading ? 'Loading...' : '🔄 Refresh Status'}
+                </button>
+            </div>
+
+            <div style={styles.buttonGroup(isMobile)}>
+                <button 
+                    onClick={() => handleAttendance("Check In")}
+                    style={{ ...styles.button(isMobile), backgroundColor: SUCCESS_COLOR }}
+                    // ⭐ MULTI-SEGMENT FIX: Only disabled if *currently* checked in.
+                    disabled={actionLoading || currentDayStatus === 'Checked In'} 
+                >
+                    {actionLoading ? 'Processing...' : '✅ Check In'}
+                </button>
+                <button 
+                    onClick={() => handleAttendance("Check Out")}
+                    style={{ ...styles.button(isMobile), backgroundColor: DANGER_COLOR }}
+                    // Only enabled if *currently* checked in.
+                    disabled={actionLoading || currentDayStatus !== 'Checked In'} 
+                >
+                    {actionLoading ? 'Processing...' : '🚪 Check Out'}
+                </button>
+            </div>
         </div>
-      )}
-      
-      <h3 style={styles.cardTitle(isMobile)}>📍 Geolocation Check-in/out</h3>
-
-      {/* Map Container */}
-      <div style={styles.mapContainer(isMobile)}>
-        <MapContainer
-          key={firstOffice.id} 
-          center={initialCenter}
-          zoom={16}
-          scrollWheelZoom={true}
-          style={styles.mapStyle(isMobile)} 
-        >
-          <RecenterMap center={currentLocation} />
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution="&copy; OpenStreetMap contributors"
-          />
-          {allOffices.map((office) => (
-            <React.Fragment key={office.id}>
-              <Marker position={[office.latitude, office.longitude]} icon={blueIcon}>
-                <Popup>
-                  <strong>{office.name}</strong> <br /> Radius: {office.radius}m
-                </Popup>
-              </Marker>
-              <Circle
-                center={[office.latitude, office.longitude]}
-                radius={office.radius}
-                pathOptions={{ color: SUCCESS_COLOR, fillColor: SUCCESS_COLOR, fillOpacity: 0.2 }}
-              />
-            </React.Fragment>
-          ))}
-          {currentLocation && (
-            <Marker position={currentLocation} icon={userPinIcon}>
-              <Popup>Your Current Location</Popup>
-            </Marker>
-          )}
-        </MapContainer>
-      </div>
-
-      {/* Status Box */}
-      <div style={styles.statusBox(isMobile)}>
-        <p style={{ margin: '0 0 5px 0' }}>
-          <strong>Today's Status:</strong> <span style={{ color: getStatusColor(currentDayStatus), fontWeight: '600', marginLeft: '10px' }}>
-            {currentDayStatus}
-          </span>
-        </p>
-        <p style={{ margin: 0, fontSize: '0.9em', color: '#6c757d' }}><strong>Action Status:</strong> {statusMessage}</p>
-      </div>
-
-      {/* Button Group */}
-      <div style={styles.buttonGroup(isMobile)}>
-        <button 
-          onClick={() => handleAttendance("Check In")}
-          style={{ ...styles.button(isMobile), backgroundColor: SUCCESS_COLOR }}
-          // ⭐ FIX: Button is disabled if an action is loading, OR if the status is wrong
-          disabled={actionLoading || currentDayStatus === 'Checked In' || currentDayStatus === 'Checked Out'}
-        >
-          {actionLoading ? 'Processing...' : '✅ Check In'}
-        </button>
-        <button 
-          onClick={() => handleAttendance("Check Out")}
-          style={{ ...styles.button(isMobile), backgroundColor: DANGER_COLOR }}
-          // ⭐ FIX: Button is disabled if an action is loading, OR if the status is wrong
-          disabled={actionLoading || currentDayStatus !== 'Checked In'}
-        >
-          {actionLoading ? 'Processing...' : '🚪 Check Out'}
-        </button>
-      </div>
-    </div>
-  );
+    );
 };
 
 
@@ -397,7 +419,7 @@ const MyAttendance = () => {
     const [endDate, setEndDate] = useState(today);
 
     const [loading, setLoading] = useState(false);
-    const [exportLoading, setExportLoading] = useState(false); // Separate loader for exports
+    const [exportLoading, setExportLoading] = useState(false); 
     const [error, setError] = useState(null);
     const [toastMessage, setToastMessage] = useState("Ready for export.");
     const [isToastError, setIsToastError] = useState(false);
@@ -427,7 +449,6 @@ const MyAttendance = () => {
         const formattedDate = formatDateForApi(date);
 
         try {
-            // Use 'api' instance
             const response = await api.get(
                 `/attendance/logs?date=${formattedDate}`,
                 { headers: { Authorization: `Bearer ${token}` } }
@@ -448,12 +469,11 @@ const MyAttendance = () => {
         const formattedDate = formatDateForApi(selectedDate);
         
         try {
-            // Use 'api' instance
             const response = await api.get(
                 `/attendance/export-daily?date=${formattedDate}`,
                 {
                     headers: { Authorization: `Bearer ${token}` },
-                    responseType: 'blob', // Expecting a file (binary data)
+                    responseType: 'blob', 
                 }
             );
 
@@ -473,7 +493,6 @@ const MyAttendance = () => {
             if (err.response?.status === 404) {
                 message = `No logs found for ${formattedDate} to export.`;
             } else if (err.response?.data) {
-                // Try to read error message from blob
                 message = "Error exporting: Server error";
             }
             setError(message);
@@ -494,7 +513,6 @@ const MyAttendance = () => {
         const end = formatDateForApi(endDate);
         
         try {
-            // Use 'api' instance
             const response = await api.get(
                 `/attendance/export/mine?start=${start}&end=${end}`,
                 {
@@ -533,7 +551,7 @@ const MyAttendance = () => {
         if (selectedDate) {
             fetchAttendanceLog(selectedDate);
         }
-    }, [selectedDate, token]); // Removed fetchAttendanceLog from deps, token is sufficient
+    }, [selectedDate, token]); 
 
     const handleCalendarDateChange = (date) => {
         setSelectedDate(date);
@@ -1033,11 +1051,10 @@ const EmployeeDashboard = () => {
             console.log("No user found, redirecting to login.");
             navigate("/");
         }
-    }, [user, navigate]); // Add user dependency
+    }, [user, navigate]); 
 
-    // This return is crucial for the redirect to work
     if (!user) {
-        return null; // Render nothing while redirecting
+        return null; 
     }
     
     const handleLogout = () => {
