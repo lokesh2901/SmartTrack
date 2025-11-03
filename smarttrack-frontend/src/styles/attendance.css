@@ -1,0 +1,52 @@
+/* ===== Attendance Calendar Colors ===== */
+
+.react-calendar {
+  border: none;
+  border-radius: 16px;
+  width: 100%;
+  max-width: 400px;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.1);
+  padding: 10px;
+}
+
+.react-calendar__tile {
+  border-radius: 50%;
+  height: 50px;
+  width: 50px;
+  text-align: center;
+  vertical-align: middle;
+  font-weight: 500;
+}
+
+/* Present - Green */
+.present {
+  background-color: #28a745 !important;
+  color: #fff !important;
+}
+
+/* Half Day - Orange */
+.half {
+  background-color: #ff9800 !important;
+  color: #fff !important;
+}
+
+/* Absent - Red */
+.absent {
+  background-color: #dc3545 !important;
+  color: #fff !important;
+}
+
+/* Upcoming - Grey */
+.upcoming {
+  background-color: #bdbdbd !important;
+  color: #fff !important;
+}
+
+/* Hover effect */
+.react-calendar__tile:enabled:hover {
+  filter: brightness(1.2);
+  transform: scale(1.05);
+  transition: all 0.2s ease-in-out;
+}
