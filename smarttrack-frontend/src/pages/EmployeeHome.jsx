@@ -2,17 +2,19 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { Routes, Route, useNavigate, Link, useLocation } from 'react-router-dom';
 import { MapContainer, TileLayer, Marker, Circle, Popup, useMap } from "react-leaflet"; 
 import L from "leaflet";
-import axios from "axios";
+import axios from "axios"; // We still need the base import for the interceptor
 import 'leaflet/dist/leaflet.css'; 
 import officeMarkerImage from '../assets/office.png';
 import userMarkerImage from '../assets/user.png';
-// --- Calendar Imports for MyAttendance Component ---
 import Calendar from 'react-calendar'; 
 import 'react-calendar/dist/Calendar.css'; 
 
-// --- Configuration and Constants ---
+// ===================================================================
+// --- 1. CONFIGURATION, CONSTANTS, AND HELPERS ---
+// ===================================================================
+
 const API_BASE_URL = "https://smarttrack-backend-oo3q.onrender.com/api";
-const MOBILE_BREAKPOINT = 768; // Screens smaller than 768px are considered mobile
+const MOBILE_BREAKPOINT = 768;
 
 // UI Constants
 const PRIMARY_COLOR = '#007bff';
@@ -22,7 +24,31 @@ const WARNING_COLOR = '#ffc107';
 const FONT_COLOR = '#343a40';
 const BACKGROUND_COLOR = '#f8f9fa';
 
-// Office Marker
+// --- ⭐ ROBUSTNESS FIX: AXIOS API INSTANCE WITH INTERCEPTOR ---
+// We create a custom 'api' instance to handle all our requests.
+const api = axios.create({
+  baseURL: API_BASE_URL
+});
+
+// This interceptor runs on EVERY response from the API
+api.interceptors.response.use(
+  (response) => response, // If response is 2xx, just pass it through
+  (error) => {
+    // If the error is a 401 (Unauthorized)
+    if (error.response && error.response.status === 401) {
+      console.warn("Unauthorized request. Token may be expired. Logging out.");
+      // Clear the invalid token and user data
+      localStorage.removeItem("token");
+      localStorage.removeItem("user");
+      // Force a redirect to the login page
+      window.location.href = '/'; 
+    }
+    // IMPORTANT: R-throw the error so the component's .catch() block still fires
+    return Promise.reject(error);
+  }
+);
+
+// --- Leaflet Icons ---
 const blueIcon = new L.Icon({
   iconUrl: officeMarkerImage,
   iconSize: [60, 62],
@@ -30,7 +56,6 @@ const blueIcon = new L.Icon({
   popupAnchor: [0, -35],
 });
 
-// User Marker
 const userPinIcon = new L.Icon({
   iconUrl: userMarkerImage,
   iconSize: [30, 42],
@@ -39,42 +64,27 @@ const userPinIcon = new L.Icon({
 });
 
 // --- Mobile Responsiveness Hook ---
-/**
- * Custom hook to get the current window width.
- * This allows components to adapt their styles for mobile.
- */
 const useWindowSize = () => {
-    const [width, setWidth] = useState(window.innerWidth);
-
-    useEffect(() => {
-        const handleResize = () => {
-            setWidth(window.innerWidth);
-        };
-        
-        window.addEventListener('resize', handleResize);
-        
-        // Cleanup listener on component unmount
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    return width;
+  const [width, setWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const handleResize = () => setWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+  return width;
 };
 
-
-// Geolocation and Map Helpers 
+// --- Geolocation and Map Helpers ---
 const calculateDistance = (lat1, lon1, lat2, lon2) => {
-  // Haversine formula to calculate distance in meters
   const R = 6371e3; 
   const φ1 = lat1 * Math.PI/180;
   const φ2 = lat2 * Math.PI/180;
   const Δφ = (lat2-lat1) * Math.PI/180;
   const Δλ = (lon2-lon1) * Math.PI/180;
-
   const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
             Math.cos(φ1) * Math.cos(φ2) *
             Math.sin(Δλ/2) * Math.sin(Δλ/2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-
   return R * c; 
 };
 
@@ -82,16 +92,20 @@ const RecenterMap = ({ center }) => {
   const map = useMap();
   useEffect(() => {
     if (center) {
-      map.flyTo(center, 18);
+      map.flyTo(center, 18); // Zoom in close (18 is good)
     }
   }, [center, map]);
   return null;
 };
 
 
-// ----------------------------------------------------------------------
-// --- 1. HOME / CHECK-IN / CHECK-OUT PAGE ---
-// ----------------------------------------------------------------------
+// ===================================================================
+// --- 2. PAGE COMPONENTS ---
+// ===================================================================
+
+// -------------------------------------------------------------------
+// --- 2A. HOME / CHECK-IN / CHECK-OUT PAGE ---
+// -------------------------------------------------------------------
 
 const CheckInOutPage = () => {
   const [allOffices, setAllOffices] = useState([]);
@@ -105,18 +119,24 @@ const CheckInOutPage = () => {
     isError: false 
   });
 
-  // --- Responsive Hook ---
   const width = useWindowSize();
   const isMobile = width < MOBILE_BREAKPOINT;
-
   const token = localStorage.getItem("token");
 
-  // --- Geolocation & Pop-up Functions ---
+  // --- ⭐ GEOLOCATION SPEED FIX APPLIED HERE ---
   const getLocation = () => { 
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
         return reject(new Error("Geolocation is not supported by your browser."));
       }
+      
+      // ⭐ SPEED OPTIMIZATIONS ADDED:
+      const options = {
+        enableHighAccuracy: false, // Use faster, less-accurate method (Wi-Fi/cellular)
+        timeout: 5000,           // Give up after 5 seconds if it's taking too long
+        maximumAge: 60000          // Accept a cached position that is up to 1 minute old
+      };
+
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
@@ -124,7 +144,8 @@ const CheckInOutPage = () => {
         },
         (error) => {
           reject(new Error(`Geolocation error: ${error.message}`));
-        }
+        },
+        options // Pass the optimized options in
       );
     });
   };
@@ -135,6 +156,8 @@ const CheckInOutPage = () => {
       setCurrentLocation([location.latitude, location.longitude]);
     } catch (err) {
       console.warn(err.message);
+      // Don't show a scary toast, just log it. 
+      // The user can try again with the button.
     }
   };
 
@@ -148,10 +171,11 @@ const CheckInOutPage = () => {
   // Fetch All Office Data AND Current Status on load
   useEffect(() => {
     const fetchData = async () => {
-      fetchUserLocation();
+      // Don't block loading, just try to get it.
+      fetchUserLocation(); 
       try {
-        // 1. Fetch All Offices
-        const officeRes = await axios.get(`${API_BASE_URL}/offices`, {
+        // Use 'api' instance now
+        const officeRes = await api.get('/offices', {
           headers: { Authorization: `Bearer ${token}` },
         });
         
@@ -161,8 +185,8 @@ const CheckInOutPage = () => {
           showToast("No offices found in the database.", true);
         }
 
-        // 2. Fetch Today's Attendance Status
-        const statusRes = await axios.get(`${API_BASE_URL}/attendance/status`, {
+        // Use 'api' instance now
+        const statusRes = await api.get('/attendance/status', {
           headers: { Authorization: `Bearer ${token}` },
         });
         
@@ -170,28 +194,33 @@ const CheckInOutPage = () => {
         setCurrentDayStatus(status);
 
       } catch (err) {
+        // The interceptor will handle 401s
         console.error("Failed to fetch initial data:", err);
-        showToast("Failed to fetch initial data.", true);
+        showToast("Failed to fetch initial data. Please try refreshing.", true);
         setCurrentDayStatus("Unknown (Error)");
       } finally {
         setLoading(false);
       }
     };
     fetchData();
-  }, [token]);
-
+  }, [token]); // token dependency is correct
 
   // --- Attendance Handling Logic ---
   const handleAttendance = async (type) => {
     if (allOffices.length === 0) return showToast("Office location data is missing.", true);
-    setStatusMessage(`Attempting to ${type}...`);
+    
+    // Give immediate feedback
+    setStatusMessage(`Getting your location...`); 
+    setLoading(true); // Use main loader to disable buttons
 
     try {
+      // 1. Get location (now much faster)
       const location = await getLocation();
       const { latitude: userLat, longitude: userLon } = location;
       setCurrentLocation([userLat, userLon]); 
+      setStatusMessage(`Location found. Validating...`);
 
-      // Find the closest valid office
+      // 2. Find the closest valid office
       let closestValidOffice = null;
       for (const office of allOffices) {
         const distance = calculateDistance(userLat, userLon, office.latitude, office.longitude);
@@ -201,21 +230,26 @@ const CheckInOutPage = () => {
         }
       }
 
+      // 3. Handle validation failure
       if (!closestValidOffice) {
         const msg = `You are not within the radius of any registered office to ${type}.`;
         showToast(msg, true);
         setStatusMessage("Failed: Too far from any office.");
+        setLoading(false);
         return;
       }
 
-      // API Call to Check In/Out
-      const res = await axios.post(
-        `${API_BASE_URL}/attendance/${type.toLowerCase().replace(' ', '')}`,
+      // 4. Make API Call
+      setStatusMessage(`Valid location. Sending ${type} request...`);
+      // Use 'api' instance now and correct URL
+      const res = await api.post(
+        `/attendance/${type.toLowerCase().replace(' ', '')}`,
         { latitude: userLat, longitude: userLon },
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      const successMsg = `${type} successful! Message: ${res.data.message}`;
+      // 5. Handle Success
+      const successMsg = `${type} successful!`;
       showToast(successMsg, false);
       setStatusMessage(`${successMsg} at ${closestValidOffice.name}.`);
       setCurrentDayStatus(type === "Check In" ? "Checked In" : "Checked Out");
@@ -223,17 +257,31 @@ const CheckInOutPage = () => {
     } catch (err) {
       console.error(`Failed to ${type}:`, err.response ? err.response.data : err);
       
-      const errorMessage = err.response?.data?.message || err.message || "Please check console for details.";
+      let errorMessage = "An error occurred.";
+      if (err.message.includes("Geolocation")) {
+        errorMessage = err.message; // Show the specific location error
+      } else if (err.response?.data?.message) {
+        errorMessage = err.response.data.message; // Show backend error
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
       
       showToast(`Error during ${type}: ${errorMessage}`, true);
       setStatusMessage(`Failed to ${type}. Reason: ${errorMessage}`);
+    } finally {
+      setLoading(false); // Re-enable buttons
     }
   };
 
 
   // --- JSX Render ---
-  if (loading) return <div style={{ textAlign: 'center', padding: '50px' }}>Loading Map and Status...</div>;
-  if (allOffices.length === 0) return <div style={{ textAlign: 'center', padding: '50px' }}>No office data available</div>;
+  if (loading && allOffices.length === 0) { // Only show full-page loader on initial load
+    return <div style={{ textAlign: 'center', padding: '50px' }}>Loading Map and Status...</div>;
+  }
+  
+  if (!loading && allOffices.length === 0) {
+    return <div style={{ textAlign: 'center', padding: '50px' }}>No office data available. Please contact admin.</div>;
+  }
 
   const firstOffice = allOffices[0];
   const initialCenter = [firstOffice.latitude, firstOffice.longitude];
@@ -248,7 +296,6 @@ const CheckInOutPage = () => {
   return (
     <div style={styles.card(isMobile)}>
       
-      {/* Toast Notification */}
       {toast.isVisible && (
         <div style={{
           ...styles.toast(isMobile),
@@ -260,12 +307,11 @@ const CheckInOutPage = () => {
       
       <h3 style={styles.cardTitle(isMobile)}>📍 Geolocation Check-in/out</h3>
 
-      {/* Map Container */}
       <div style={styles.mapContainer(isMobile)}>
         <MapContainer
-          key={firstOffice.latitude} 
+          key={firstOffice.id} // Use a stable key
           center={initialCenter}
-          zoom={55} 
+          zoom={16} // A more reasonable default zoom
           scrollWheelZoom={true}
           style={styles.mapStyle(isMobile)} 
         >
@@ -313,21 +359,20 @@ const CheckInOutPage = () => {
         <p style={{ margin: 0, fontSize: '0.9em', color: '#6c757d' }}><strong>Action Status:</strong> {statusMessage}</p>
       </div>
 
-      {/* Check-in / Check-out buttons */}
       <div style={styles.buttonGroup(isMobile)}>
         <button 
           onClick={() => handleAttendance("Check In")}
           style={{ ...styles.button(isMobile), backgroundColor: SUCCESS_COLOR }}
-          disabled={currentDayStatus === 'Checked In'}
+          disabled={loading || currentDayStatus === 'Checked In' || currentDayStatus === 'Checked Out'} // Disable if already checked in or out
         >
-          ✅ Check In
+          {loading ? 'Processing...' : '✅ Check In'}
         </button>
         <button 
           onClick={() => handleAttendance("Check Out")}
           style={{ ...styles.button(isMobile), backgroundColor: DANGER_COLOR }}
-          disabled={currentDayStatus === 'Checked Out' || currentDayStatus !== 'Checked In'}
+          disabled={loading || currentDayStatus !== 'Checked In'} // Can only check out if checked in
         >
-          🚪 Check Out
+          {loading ? 'Processing...' : '🚪 Check Out'}
         </button>
       </div>
     </div>
@@ -335,37 +380,30 @@ const CheckInOutPage = () => {
 };
 
 
-// ----------------------------------------------------------------------
-// --- 2. ATTENDANCE PAGE (LOGS BY DATE) - WITH EXPORT FEATURE ---
-// ----------------------------------------------------------------------
+// -------------------------------------------------------------------
+// --- 2B. ATTENDANCE PAGE (LOGS BY DATE) ---
+// -------------------------------------------------------------------
 
 const MyAttendance = () => {
-    // State for single-day view
     const [selectedDate, setSelectedDate] = useState(new Date()); 
     const [dailyAttendanceData, setDailyAttendanceData] = useState(null); 
     
-    // State for date range export (NEW)
     const today = new Date();
     const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const [startDate, setStartDate] = useState(thirtyDaysAgo);
     const [endDate, setEndDate] = useState(today);
 
-    // General UI state
     const [loading, setLoading] = useState(false);
+    const [exportLoading, setExportLoading] = useState(false); // Separate loader for exports
     const [error, setError] = useState(null);
     const [toastMessage, setToastMessage] = useState("Ready for export.");
     const [isToastError, setIsToastError] = useState(false);
     
-    // --- Responsive Hook ---
     const width = useWindowSize();
     const isMobile = width < MOBILE_BREAKPOINT;
-
     const token = localStorage.getItem("token");
 
-    /**
-     * Helper to format the date to YYYY-MM-DD for the API
-     */
     const formatDateForApi = (date) => {
         const d = new Date(date);
         const year = d.getFullYear();
@@ -380,27 +418,19 @@ const MyAttendance = () => {
         setTimeout(() => setToastMessage("Ready for export."), 5000);
     };
 
-    /**
-     * Function to fetch attendance logs for a specific date
-     */
     const fetchAttendanceLog = async (date) => {
         setLoading(true);
         setError(null);
         setDailyAttendanceData(null); 
-
         const formattedDate = formatDateForApi(date);
 
         try {
-            const response = await axios.get(
-                `${API_BASE_URL}/attendance/logs?date=${formattedDate}`,
-                {
-                    headers: { Authorization: `Bearer ${token}` },
-                }
+            // Use 'api' instance
+            const response = await api.get(
+                `/attendance/logs?date=${formattedDate}`,
+                { headers: { Authorization: `Bearer ${token}` } }
             );
-            
-            // Store the entire { logs, summary } object
             setDailyAttendanceData(response.data); 
-
         } catch (err) {
             console.error("Failed to fetch attendance log:", err.response?.data || err.message);
             setError(`Failed to fetch log: ${err.response?.data?.message || 'Server error'}`);
@@ -410,30 +440,25 @@ const MyAttendance = () => {
         }
     };
     
-    // --- Daily Export Function (Renamed) ---
+    // --- Daily Export Function ---
     const handleDailyExport = async () => {
-        setLoading(true);
-        setError(null);
+        setExportLoading(true);
         const formattedDate = formatDateForApi(selectedDate);
         
         try {
-            const response = await axios.get(
-                `${API_BASE_URL}/attendance/export-daily?date=${formattedDate}`, // ⭐ Existing API Route
+            // Use 'api' instance
+            const response = await api.get(
+                `/attendance/export-daily?date=${formattedDate}`,
                 {
                     headers: { Authorization: `Bearer ${token}` },
                     responseType: 'blob', // Expecting a file (binary data)
                 }
             );
 
-            // 1. Create a link element for download
             const url = window.URL.createObjectURL(new Blob([response.data]));
             const link = document.createElement('a');
             link.href = url;
-            
-            // 2. Set the filename 
             link.setAttribute('download', `attendance_log_daily_${formattedDate}.xlsx`);
-            
-            // 3. Trigger the download
             document.body.appendChild(link);
             link.click();
             link.remove();
@@ -442,52 +467,44 @@ const MyAttendance = () => {
             
         } catch (err) {
             console.error("Failed to export daily log:", err.response ? err.response.data : err);
-            
             let message = "An unexpected error occurred during daily export.";
             if (err.response?.status === 404) {
                 message = `No logs found for ${formattedDate} to export.`;
             } else if (err.response?.data) {
-                message = `Error exporting: ${err.message}`;
+                // Try to read error message from blob
+                message = "Error exporting: Server error";
             }
-
             setError(message);
             showStatusMessage(message, true);
         } finally {
-            setLoading(false);
+            setExportLoading(false);
         }
     };
 
-    // ⭐ NEW FUNCTION: Handle Date Range Export
+    // --- Range Export Function ---
     const handleRangeExport = async () => {
         if (startDate > endDate) {
             showStatusMessage("Start Date cannot be after End Date.", true);
             return;
         }
-
-        setLoading(true);
-        setError(null);
-        
+        setExportLoading(true);
         const start = formatDateForApi(startDate);
         const end = formatDateForApi(endDate);
         
         try {
-            const response = await axios.get(
-                `${API_BASE_URL}/attendance/export/mine?start=${start}&end=${end}`, // ⭐ New API Route
+            // Use 'api' instance
+            const response = await api.get(
+                `/attendance/export/mine?start=${start}&end=${end}`,
                 {
                     headers: { Authorization: `Bearer ${token}` },
-                    responseType: 'blob', // Expecting a file (binary data)
+                    responseType: 'blob',
                 }
             );
 
-            // 1. Create a link element for download
             const url = window.URL.createObjectURL(new Blob([response.data]));
             const link = document.createElement('a');
             link.href = url;
-            
-            // 2. Set the filename 
             link.setAttribute('download', `attendance_log_range_${start}_to_${end}.xlsx`);
-            
-            // 3. Trigger the download
             document.body.appendChild(link);
             link.click();
             link.remove();
@@ -496,39 +513,32 @@ const MyAttendance = () => {
             
         } catch (err) {
             console.error("Failed to export range log:", err.response ? err.response.data : err);
-            
             let message = "An unexpected error occurred during range export.";
             if (err.response?.status === 404) {
                 message = `No logs found between ${start} and ${end} to export.`;
             } else if (err.response?.data) {
-                message = `Error exporting: ${err.message}`;
+                message = `Error exporting: Server error`;
             }
-
             setError(message);
             showStatusMessage(message, true);
         } finally {
-            setLoading(false);
+            setExportLoading(false);
         }
     };
 
-
-    // --- useEffect Hook: Re-run when selectedDate changes ---
+    // Fetch log on initial load and when date changes
     useEffect(() => {
         if (selectedDate) {
             fetchAttendanceLog(selectedDate);
         }
-    }, [selectedDate, token]);
+    }, [selectedDate, token]); // Removed fetchAttendanceLog from deps, token is sufficient
 
-
-    // --- Handlers ---
     const handleCalendarDateChange = (date) => {
-        setSelectedDate(date); // This triggers the useEffect to re-fetch data
+        setSelectedDate(date);
     };
     
-    // Default empty structure for safe destructuring
     const { logs, summary } = dailyAttendanceData || { logs: [], summary: {} };
 
-    // --- Helper to get status color for display ---
     const getStatusColor = (status) => {
         switch (status) {
             case 'Full Day': return SUCCESS_COLOR;
@@ -539,13 +549,11 @@ const MyAttendance = () => {
         }
     };
 
-
-    // --- JSX Render ---
     return (
         <div style={styles.card(isMobile)}>
             <h3 style={styles.cardTitle(isMobile)}>📅 My Attendance Logs & Export</h3>
 
-            {/* Range Export Section (NEW) */}
+            {/* Range Export Section */}
             <div style={logStyles.rangeExportBox(isMobile)}>
                 <h4 style={{ color: PRIMARY_COLOR, marginBottom: '15px' }}>Export Logs by Date Range</h4>
                 <div style={logStyles.rangeInputs(isMobile)}>
@@ -572,9 +580,9 @@ const MyAttendance = () => {
                     <button 
                         onClick={handleRangeExport}
                         style={logStyles.rangeExportButton(isMobile)}
-                        disabled={loading || startDate > endDate}
+                        disabled={exportLoading || loading || startDate > endDate}
                     >
-                        ⬇️ Export Range Logs
+                        {exportLoading ? 'Exporting...' : '⬇️ Export Range Logs'}
                     </button>
                 </div>
             </div>
@@ -590,26 +598,23 @@ const MyAttendance = () => {
                     <Calendar 
                         onChange={handleCalendarDateChange} 
                         value={selectedDate} 
-                        maxDate={new Date()} // Prevent selecting future dates
+                        maxDate={new Date()}
                     />
                     
-                    {/* Daily Export Button (relocated) */}
                     <button 
                         onClick={handleDailyExport}
                         style={{...logStyles.exportButton(isMobile), marginTop: '10px'}}
-                        disabled={loading || logs.length === 0}
+                        disabled={exportLoading || loading || !logs || logs.length === 0}
                     >
-                        ⬇️ Export Selected Day Log
+                        {exportLoading ? 'Exporting...' : '⬇️ Export Selected Day Log'}
                     </button>
-
                 </div>
 
                 {/* Right Side: Log Details */}
                 <div style={logStyles.detailsWrapper(isMobile)}>
                     
-                    {/* HEADER ROW */}
                     <div style={logStyles.headerRow(isMobile)}> 
-                        <h4>Details for: **{formatDateForApi(selectedDate)}**</h4>
+                        <h4>Details for: {formatDateForApi(selectedDate)}</h4>
                     </div>
 
                     {loading && <p style={{ color: PRIMARY_COLOR }}>Loading attendance data...</p>}
@@ -619,7 +624,6 @@ const MyAttendance = () => {
                     {!loading && !error && (
                         logs.length > 0 ? (
                             <>
-                                {/* --- DAILY SUMMARY CARD --- */}
                                 <div style={logStyles.summaryBox(isMobile)}>
                                     <p style={{ margin: 0, fontSize: '1.2em' }}>
                                         <strong>Day Status:</strong> <span style={{ color: getStatusColor(summary.day_status), fontWeight: '600', marginLeft: '10px' }}>
@@ -642,7 +646,6 @@ const MyAttendance = () => {
                                     </p>
                                 </div>
                                 
-                                {/* --- SEGMENT LOGS LIST --- */}
                                 <h5>Check-in/out Segments:</h5>
                                 <div style={logStyles.logsList(isMobile)}>
                                     {logs.map((log, index) => (
@@ -690,16 +693,13 @@ const MyAttendance = () => {
 };
 
 
-// ----------------------------------------------------------------------
-// --- 3. PROFILE PAGE ---
-// ----------------------------------------------------------------------
+// -------------------------------------------------------------------
+// --- 2C. PROFILE PAGE ---
+// -------------------------------------------------------------------
 
 const EmployeeProfile = () => {
-    // Fetches the user object from local storage
     const user = JSON.parse(localStorage.getItem("user")) || {};
     const navigate = useNavigate();
-
-    // --- Responsive Hook ---
     const width = useWindowSize();
     const isMobile = width < MOBILE_BREAKPOINT;
 
@@ -713,7 +713,6 @@ const EmployeeProfile = () => {
         <div style={{...styles.card(isMobile), maxWidth: '600px', margin: '0 auto' }}>
             <h3 style={styles.cardTitle(isMobile)}>👤 Employee Profile</h3>
             
-            {/* Display Employee Details from the 'user' object */}
             <div style={styles.profileDetail(isMobile)}>
                 <p><strong>Name:</strong></p> <p>{user.name || 'N/A'}</p>
             </div>
@@ -726,8 +725,7 @@ const EmployeeProfile = () => {
             <div style={styles.profileDetail(isMobile)}>
                 <p><strong>Role:</strong></p> <p style={{ textTransform: 'capitalize' }}>{user.role || 'employee'}</p>
             </div>
-            <div style
-={styles.profileDetail(isMobile)}>
+            <div style={styles.profileDetail(isMobile)}>
                 <p><strong>Office Location:</strong></p> <p>{user.office_location || 'Not Assigned'}</p>
             </div>
             
@@ -742,9 +740,9 @@ const EmployeeProfile = () => {
 };
 
 
-// ----------------------------------------------------------------------
-// --- STYLES OBJECT (NOW AS FUNCTIONS) ---
-// ----------------------------------------------------------------------
+// ===================================================================
+// --- 3. STYLES OBJECTS ---
+// ===================================================================
 
 const styles = {
     // Global Layout
@@ -774,7 +772,7 @@ const styles = {
         zIndex: 1000,
         maxWidth: '100%',
         margin: '0 auto',
-        overflowX: isMobile ? 'auto' : 'visible', // Allow horizontal scroll on mobile
+        overflowX: isMobile ? 'auto' : 'visible',
     }),
     navItemBase: (isMobile) => ({
         padding: isMobile ? '8px 12px' : '10px 15px',
@@ -785,7 +783,7 @@ const styles = {
         fontSize: isMobile ? '0.9em' : '1em',
         border: '1px solid transparent',
         color: FONT_COLOR,
-        whiteSpace: 'nowrap', // Prevent nav items from breaking line
+        whiteSpace: 'nowrap',
     }),
     navItemActive: (isMobile) => ({
         backgroundColor: PRIMARY_COLOR,
@@ -798,7 +796,7 @@ const styles = {
         color: FONT_COLOR,
         padding: '0.75rem 0',
         fontSize: isMobile ? '0.8em' : '0.9em',
-        whiteSpace: 'nowrap', // Prevent wrapping
+        whiteSpace: 'nowrap',
         paddingLeft: '10px',
     }),
     
@@ -839,16 +837,15 @@ const styles = {
         marginBottom: '20px',
         borderLeft: `5px solid ${PRIMARY_COLOR}`
     }),
-    
-    // Buttons
+   // Buttons
     buttonGroup: (isMobile) => ({
         display: "flex", 
-        flexDirection: isMobile ? 'column' : 'row', // Stack buttons on mobile
+        flexDirection: isMobile ? 'column' : 'row',
         gap: "15px", 
         marginBottom: "20px"
     }),
     button: (isMobile) => ({
-        flex: isMobile ? '1 1 auto' : 1, // Allow buttons to grow/shrink in column
+        flex: isMobile ? '1 1 auto' : 1,
         padding: "12px", 
         fontSize: "1.1em", 
         color: 'white',
@@ -859,24 +856,23 @@ const styles = {
         transition: 'opacity 0.2s'
     }),
     
-    // Profile (Updated for better detail presentation)
+    // Profile
     profileDetail: (isMobile) => ({
         display: 'grid',
-        gridTemplateColumns: isMobile ? '1fr' : '150px 1fr', // Stack on mobile
-        gap: isMobile ? '5px 10px' : '0 10px', // Add row gap on mobile
+        gridTemplateColumns: isMobile ? '1fr' : '150px 1fr',
+        gap: isMobile ? '5px 10px' : '0 10px',
         padding: '12px 0',
         borderBottom: `1px solid #e9ecef`,
         fontSize: '1em',
         color: FONT_COLOR,
-        // On mobile, the first <p> (label) will be on row 1, second <p> (value) on row 2
     }),
     
-    // Toast (CheckInOutPage only)
+    // Toast
     toast: (isMobile) => ({
         position: 'fixed',
-        top: '10px', // Closer to top on mobile
+        top: '10px',
         right: '10px',
-        left: isMobile ? '10px' : 'auto', // Full width on mobile
+        left: isMobile ? '10px' : 'auto',
         padding: '15px 20px',
         color: 'white',
         borderRadius: '6px',
@@ -887,9 +883,8 @@ const styles = {
     }),
 };
 
-// --- New/Updated Styles for Attendance Page ---
+// --- Styles for Attendance Page ---
 const logStyles = {
-    // ⭐ NEW STYLE: Range Export container
     rangeExportBox: (isMobile) => ({
         padding: isMobile ? '15px' : '20px',
         backgroundColor: '#f1f8ff',
@@ -897,12 +892,11 @@ const logStyles = {
         marginBottom: '30px',
         border: `1px solid ${PRIMARY_COLOR}`,
     }),
-    // ⭐ NEW STYLE: Date range inputs
     rangeInputs: (isMobile) => ({
         display: 'flex',
-        flexDirection: isMobile ? 'column' : 'row', // Stack inputs on mobile
+        flexDirection: isMobile ? 'column' : 'row',
         gap: isMobile ? '15px' : '20px',
-        alignItems: isMobile ? 'stretch' : 'flex-end', // Stretch inputs full-width on mobile
+        alignItems: isMobile ? 'stretch' : 'flex-end',
     }),
     dateInputGroup: (isMobile) => ({
         display: 'flex',
@@ -916,15 +910,14 @@ const logStyles = {
         border: '1px solid #ccc',
         fontSize: '1em',
         marginTop: '5px',
-        width: '100%', // Ensure input takes full width of its container
-        boxSizing: 'border-box', // Include padding in width
+        width: '100%',
+        boxSizing: 'border-box',
     }),
-    // ⭐ NEW STYLE: Range Export button
     rangeExportButton: (isMobile) => ({
         padding: "10px 20px", 
         fontSize: "1em", 
         color: 'white',
-        backgroundColor: PRIMARY_COLOR, // Blue for range export
+        backgroundColor: PRIMARY_COLOR,
         border: 'none',
         borderRadius: '4px',
         cursor: 'pointer',
@@ -932,7 +925,7 @@ const logStyles = {
         transition: 'opacity 0.2s',
         whiteSpace: 'nowrap',
         flexShrink: 0,
-        width: isMobile ? '100%' : 'auto', // Full width on mobile
+        width: isMobile ? '100%' : 'auto',
     }),
     statusMessage: (isMobile) => ({
         padding: '10px 15px',
@@ -942,22 +935,21 @@ const logStyles = {
     }),
     container: (isMobile) => ({
         display: 'flex',
-        flexDirection: isMobile ? 'column' : 'row', // Stack calendar and details on mobile
+        flexDirection: isMobile ? 'column' : 'row',
         gap: '30px',
         alignItems: 'flex-start',
     }),
     calendarWrapper: (isMobile) => ({
         flexShrink: 0, 
-        width: isMobile ? '100%' : 'auto', // Calendar takes full width on mobile
-        maxWidth: isMobile ? '400px' : 'none', // Limit calendar max width on mobile
-        margin: isMobile ? '0 auto' : '0', // Center calendar on mobile
+        width: isMobile ? '100%' : 'auto',
+        maxWidth: isMobile ? '400px' : 'none',
+        margin: isMobile ? '0 auto' : '0',
     }),
     detailsWrapper: (isMobile) => ({
         flexGrow: 1,
-        minWidth: isMobile ? '100%' : '300px', // Details take full width on mobile
+        minWidth: isMobile ? '100%' : '300px',
         padding: isMobile ? '0' : '10px',
     }),
-    // Daily Export Button (relocated/renamed)
     exportButton: (isMobile) => ({ 
         padding: "10px 15px", 
         fontSize: "1em", 
@@ -997,7 +989,7 @@ const logStyles = {
         borderLeft: `3px solid ${WARNING_COLOR}`
     }),
     logsList: (isMobile) => ({
-        maxHeight: isMobile ? '300px' : '400px', // Shorter list on mobile
+        maxHeight: isMobile ? '300px' : '400px',
         overflowY: 'auto',
         paddingRight: '10px' 
     }),
@@ -1020,27 +1012,30 @@ const logStyles = {
     })
 };
 
-// ----------------------------------------------------------------------
-// --- MAIN EMPLOYEE DASHBOARD COMPONENT ---
-// ----------------------------------------------------------------------
+
+// ===================================================================
+// --- 4. MAIN EMPLOYEE DASHBOARD COMPONENT (WRAPPER & ROUTER) ---
+// ===================================================================
 
 const EmployeeDashboard = () => {
-    // Get user and navigation data
     const user = JSON.parse(localStorage.getItem("user"));
     const navigate = useNavigate();
     const location = useLocation();
-
-    // --- Responsive Hook ---
+    
     const width = useWindowSize();
     const isMobile = width < MOBILE_BREAKPOINT;
 
     // Protection: Redirect if no user data
-    if (!user) {
-        // Use useEffect to avoid state update during render
-        useEffect(() => {
+    useEffect(() => {
+        if (!user) {
+            console.log("No user found, redirecting to login.");
             navigate("/");
-        }, [navigate]);
-        return null; 
+        }
+    }, [user, navigate]); // Add user dependency
+
+    // This return is crucial for the redirect to work
+    if (!user) {
+        return null; // Render nothing while redirecting
     }
     
     const handleLogout = () => {
@@ -1049,11 +1044,7 @@ const EmployeeDashboard = () => {
         navigate("/"); 
     };
 
-    /**
-     * Helper to apply active/inactive styles to nav links
-     */
     const getNavItemStyle = (path) => {
-        // Check if current URL ends with the path or is the default '/' route
         const isActive = location.pathname.endsWith(path) || (path === 'home' && (location.pathname.endsWith('/employee') || location.pathname.endsWith('/employee/')));
         
         return isActive 
@@ -1095,19 +1086,10 @@ const EmployeeDashboard = () => {
             {/* 2. Content Area - ROUTING */}
             <div style={styles.contentArea(isMobile)}>
                 <Routes>
-                    
-                    {/* 1. Default Route (matches /employee/) - Uses 'index' for priority */}
                     <Route index element={<CheckInOutPage />} /> 
-                    
-                    {/* 2. Explicit Home Route (matches /employee/home) */}
                     <Route path="home" element={<CheckInOutPage />} /> 
-                    
-                    {/* 3. My Attendance Route (matches /employee/attendance) */}
                     <Route path="attendance" element={<MyAttendance />} /> 
-                    
-                    {/* 4. Profile Route (matches /employee/profile) */}
                     <Route path="profile" element={<EmployeeProfile />} /> 
-                    
                 </Routes>
             </div>
         </div>
@@ -1115,4 +1097,3 @@ const EmployeeDashboard = () => {
 };
 
 export default EmployeeDashboard;
-
