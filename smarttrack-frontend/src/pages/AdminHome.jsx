@@ -8,6 +8,7 @@ import {
   Table,
   Modal,
   Form,
+  Alert,
 } from "react-bootstrap";
 import { useNavigate } from "react-router-dom";
 import "bootstrap/dist/css/bootstrap.min.css";
@@ -24,6 +25,7 @@ export default function AdminHome() {
   const [editMode, setEditMode] = useState(false);
   const [selectedData, setSelectedData] = useState(null);
   const [formData, setFormData] = useState({});
+  const [errorMsg, setErrorMsg] = useState("");
   const navigate = useNavigate();
 
   // ---------------------- FETCH DATA ----------------------
@@ -64,6 +66,7 @@ export default function AdminHome() {
   const handleAdd = () => {
     setEditMode(false);
     setFormData({});
+    setErrorMsg("");
     setShowModal(true);
   };
 
@@ -71,6 +74,7 @@ export default function AdminHome() {
     setEditMode(true);
     setSelectedData(item);
     setFormData(item);
+    setErrorMsg("");
     setShowModal(true);
   };
 
@@ -97,7 +101,27 @@ export default function AdminHome() {
 
   const handleSave = async () => {
     try {
+      setErrorMsg("");
       const headers = { Authorization: `Bearer ${localStorage.getItem("token")}` };
+
+      // 🔒 Basic Validation
+      if (activeTab === "users") {
+        if (!formData.name || !formData.email || !formData.role) {
+          setErrorMsg("Please fill in all required fields: name, email, and role.");
+          return;
+        }
+        if (!editMode && !formData.password) {
+          setErrorMsg("Password is required for new users.");
+          return;
+        }
+      } else {
+        if (!formData.name || !formData.latitude || !formData.longitude || !formData.radius) {
+          setErrorMsg("Please fill in all required office fields.");
+          return;
+        }
+      }
+
+      // 🔧 API Request
       if (activeTab === "users") {
         if (editMode) {
           await axios.put(`${API_URL}/users/${selectedData.id}`, formData, { headers });
@@ -113,9 +137,11 @@ export default function AdminHome() {
         }
         fetchOffices();
       }
+
       setShowModal(false);
     } catch (err) {
       console.error("Save failed", err);
+      setErrorMsg("Failed to save. Please check your input or try again later.");
     }
   };
 
@@ -300,11 +326,12 @@ export default function AdminHome() {
       <Modal show={showModal} onHide={() => setShowModal(false)} centered>
         <Modal.Header closeButton>
           <Modal.Title>
-            {editMode ? "Edit" : "Add"}{" "}
-            {activeTab === "users" ? "User" : "Office"}
+            {editMode ? "Edit" : "Add"} {activeTab === "users" ? "User" : "Office"}
           </Modal.Title>
         </Modal.Header>
         <Modal.Body>
+          {errorMsg && <Alert variant="danger">{errorMsg}</Alert>}
+
           {activeTab === "users" ? (
             <>
               <Form.Group className="mb-3">
@@ -316,6 +343,7 @@ export default function AdminHome() {
                   placeholder="Enter employee ID"
                 />
               </Form.Group>
+
               <Form.Group className="mb-3">
                 <Form.Label>Name</Form.Label>
                 <Form.Control
@@ -325,15 +353,32 @@ export default function AdminHome() {
                   placeholder="Enter full name"
                 />
               </Form.Group>
+
               <Form.Group className="mb-3">
                 <Form.Label>Email</Form.Label>
                 <Form.Control
                   name="email"
+                  type="email"
                   value={formData.email || ""}
                   onChange={handleChange}
                   placeholder="Enter email"
                 />
               </Form.Group>
+
+              {/* Show only when creating new user */}
+              {!editMode && (
+                <Form.Group className="mb-3">
+                  <Form.Label>Password</Form.Label>
+                  <Form.Control
+                    name="password"
+                    type="password"
+                    value={formData.password || ""}
+                    onChange={handleChange}
+                    placeholder="Enter password"
+                  />
+                </Form.Group>
+              )}
+
               <Form.Group className="mb-3">
                 <Form.Label>Phone Number</Form.Label>
                 <Form.Control
@@ -343,6 +388,7 @@ export default function AdminHome() {
                   placeholder="Enter phone number"
                 />
               </Form.Group>
+
               <Form.Group className="mb-3">
                 <Form.Label>Role</Form.Label>
                 <Form.Select
