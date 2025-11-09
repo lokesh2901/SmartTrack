@@ -7,7 +7,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 export const sendOTPEmail = async (email, otp) => {
   try {
     const response = await resend.emails.send({
-      from: "SmartTrack <noreply@smarttrack.dev>",
+      from: "SmartTrack <menakaattendancemanagement@gmail.com>",
       to: email,
       subject: "SmartTrack OTP Verification",
       html: `
