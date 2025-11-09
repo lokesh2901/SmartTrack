@@ -1,22 +1,27 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+import { Resend } from "resend";
+import dotenv from "dotenv";
 dotenv.config();
 
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 export const sendOTPEmail = async (email, otp) => {
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
+  try {
+    const response = await resend.emails.send({
+      from: "SmartTrack <noreply@smarttrack.dev>",
+      to: email,
+      subject: "SmartTrack OTP Verification",
+      html: `
+        <div style="font-family: Arial, sans-serif;">
+          <h2>SmartTrack OTP</h2>
+          <p>Your OTP is <b>${otp}</b>. It will expire in 5 minutes.</p>
+        </div>
+      `,
+    });
 
-  const mailOptions = {
-    from: process.env.EMAIL_USER,
-    to: email,
-    subject: 'SmartTrack OTP',
-    text: `Your OTP is: ${otp}. It will expire in 5 minutes.`,
-  };
-
-  await transporter.sendMail(mailOptions);
+    console.log("✅ OTP email sent via Resend:", response.id);
+    return true;
+  } catch (error) {
+    console.error("❌ Resend error:", error);
+    throw new Error("Failed to send OTP email");
+  }
 };
