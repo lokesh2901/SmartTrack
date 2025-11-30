@@ -9,7 +9,7 @@ export const sendOTPEmail = async (email, otp) => {
     console.log("Sending email to:", email);
 
     const response = await resend.emails.send({
-      from: "SmartTrack <menakaattendancemanagement@gmail.com>",
+      from: "SmartTrack <onboarding@resend.dev>",
       to: email,
       subject: "SmartTrack OTP Verification",
       html: `
