@@ -1,15 +1,19 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 dotenv.config();
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 export const sendOTPEmail = async (email, otp) => {
   try {
-    console.log("Sending email to:", email);
-
-    const response = await resend.emails.send({
-      from: "SmartTrack <onboarding@resend.dev>",
+    const info = await transporter.sendMail({
+      from: `"SmartTrack" <${process.env.GMAIL_USER}>`,
       to: email,
       subject: "SmartTrack OTP Verification",
       html: `
@@ -20,18 +24,12 @@ export const sendOTPEmail = async (email, otp) => {
       `,
     });
 
-    console.log("FULL RESEND RESPONSE:", JSON.stringify(response, null, 2));
-
-    return response; // DO NOT return true blindly
+    console.log("📩 OTP Sent! Gmail Message ID:", info.messageId);
+    return true;
 
   } catch (error) {
-    console.error("RESEND ERROR MESSAGE:", error.message);
-    console.error("RESEND FULL ERROR:", JSON.stringify(error, null, 2));
-
-    if (error.response) {
-      console.error("PROVIDER ERROR RESPONSE:", JSON.stringify(error.response, null, 2));
-    }
-
-    throw new Error("Failed to send OTP email");
+    console.error("❌ Gmail send error:", error.message);
+    console.error(error);
+    return false;
   }
 };
