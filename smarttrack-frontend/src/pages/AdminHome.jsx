@@ -374,7 +374,7 @@ export default function AdminHome() {
                     type="password"
                     value={formData.password || ""}
                     onChange={handleChange}
-                    placeholder="Enter password"
+                    placeholder="Enter password for new ID"
                   />
                 </Form.Group>
               )}
